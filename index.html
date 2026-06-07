@@ -1,0 +1,126 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>VIX vs Volatilità Realizzata — Vol Lab</title>
+<meta name="theme-color" content="#0f1117">
+<link rel="manifest" href="manifest.json">
+<script>(function(){try{var t=localStorage.getItem('antigravity-theme')||'dark';document.documentElement.setAttribute('data-theme',t);}catch(e){}})();</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3.0.0/dist/chartjs-adapter-date-fns.bundle.min.js"></script>
+<style>
+:root{
+  --bg:#0f1117; --bg2:#161922; --bg3:#1d212c; --line:#272c38;
+  --tx:#e6e8ee; --tx2:#9aa3b2; --tx3:#6b7280;
+  --amber:#f59e0b; --amber2:#fbbf24; --green:#34d399; --red:#f87171; --blue:#60a5fa; --purple:#a78bfa;
+  --r:12px;
+}
+html[data-theme="light"]{
+  --bg:#f5f7fa; --bg2:#ffffff; --bg3:#eef1f6; --line:#e3e7ee;
+  --tx:#1a1f29; --tx2:#586072; --tx3:#8b94a5;
+  --amber:#d97706; --amber2:#b45309; --green:#059669; --red:#dc2626; --blue:#2563eb; --purple:#7c3aed;
+}
+html[data-theme="light"] body{background:var(--bg)}
+html[data-theme="light"] .kpi,html[data-theme="light"] .card{box-shadow:0 1px 3px rgba(16,24,40,.06)}
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:var(--bg);color:var(--tx);font-family:'DM Sans',system-ui,sans-serif;line-height:1.5;font-size:14px}
+.mono{font-family:'JetBrains Mono',monospace}
+a{color:var(--amber);text-decoration:none}
+.wrap{max-width:1180px;margin:0 auto;padding:20px 18px 80px}
+header{display:flex;align-items:center;justify-content:space-between;gap:16px;flex-wrap:wrap;margin-bottom:18px}
+.brand{display:flex;align-items:center;gap:12px}
+.logo{width:38px;height:38px;border-radius:10px;background:linear-gradient(135deg,var(--amber),#b45309);display:flex;align-items:center;justify-content:center;font-weight:700;font-size:17px;color:#1a1205}
+h1{font-size:19px;font-weight:700;letter-spacing:-.3px}
+.sub{color:var(--tx2);font-size:12px}
+select,button,input{font-family:inherit}
+.usel{background:var(--bg3);color:var(--tx);border:1px solid var(--line);border-radius:9px;padding:8px 12px;font-size:13px;font-weight:600;cursor:pointer}
+.banner{background:rgba(245,158,11,.07);border:1px solid rgba(245,158,11,.28);border-radius:var(--r);padding:14px 16px;margin-bottom:18px;display:flex;gap:11px;align-items:flex-start;font-size:13px;color:var(--tx2);line-height:1.6}
+.banner b{color:var(--amber2)}
+.kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(168px,1fr));gap:12px;margin-bottom:18px}
+.kpi{background:var(--bg2);border:1px solid var(--line);border-radius:var(--r);padding:14px}
+.kpi .lab{color:var(--tx3);font-size:11px;text-transform:uppercase;letter-spacing:.5px;margin-bottom:6px;display:flex;align-items:center;gap:5px}
+.kpi .val{font-size:23px;font-weight:700;font-family:'JetBrains Mono',monospace}
+.kpi .val small{font-size:13px;color:var(--tx3);font-weight:500}
+.kpi .cmp{font-size:11.5px;color:var(--tx2);margin-top:4px}
+.badge{display:inline-block;border-radius:20px;padding:2px 9px;font-size:11px;font-weight:600;margin-top:7px}
+.badge.lo{background:rgba(52,211,153,.12);color:var(--green)}
+.badge.mid{background:rgba(245,158,11,.12);color:var(--amber2)}
+.badge.hi{background:rgba(248,113,113,.13);color:var(--red)}
+.card{background:var(--bg2);border:1px solid var(--line);border-radius:var(--r);padding:20px;margin-bottom:18px}
+.card h2{font-size:16px;font-weight:600;margin-bottom:5px;display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.card .desc{color:var(--tx2);font-size:12.5px;margin-bottom:15px;line-height:1.6;max-width:880px}
+.card .desc b{color:var(--tx)}
+.chart-box{position:relative;height:340px}
+.chart-box.sm{height:270px}
+.chart-box.tall{height:400px}
+.seg{display:inline-flex;background:var(--bg3);border:1px solid var(--line);border-radius:8px;padding:3px;gap:2px;flex-wrap:wrap}
+.seg button{background:none;border:none;color:var(--tx2);padding:5px 11px;border-radius:6px;font-size:12px;font-weight:600;cursor:pointer}
+.seg button.on{background:var(--amber);color:#1a1205}
+.toolbar{display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-bottom:14px}
+.tog{display:inline-flex;align-items:center;gap:6px;font-size:12.5px;color:var(--tx2);cursor:pointer;user-select:none;background:var(--bg3);border:1px solid var(--line);border-radius:8px;padding:5px 10px}
+.tog input{accent-color:var(--amber);cursor:pointer}
+.tog .dot{width:10px;height:10px;border-radius:3px;display:inline-block}
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:18px}
+@media(max-width:820px){.grid2{grid-template-columns:1fr}}
+table{width:100%;border-collapse:collapse;font-size:13px}
+th,td{text-align:right;padding:9px 10px;border-bottom:1px solid var(--line)}
+th{color:var(--tx3);font-weight:600;font-size:11px;text-transform:uppercase;letter-spacing:.4px}
+th:first-child,td:first-child{text-align:left}
+td.tk{font-weight:600}
+.mono-td{font-family:'JetBrains Mono',monospace}
+.pos{color:var(--green)}.neg{color:var(--red)}
+.win{color:var(--green);font-weight:700}
+.params{display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:10px;margin-top:6px}
+.param{background:var(--bg3);border:1px solid var(--line);border-radius:9px;padding:10px 12px}
+.param .pl{font-size:10.5px;text-transform:uppercase;letter-spacing:.4px;color:var(--tx3)}
+.param .pv{font-size:17px;font-weight:700;font-family:'JetBrains Mono',monospace;margin-top:2px}
+.gloss{display:grid;grid-template-columns:1fr 1fr;gap:14px 26px}
+@media(max-width:820px){.gloss{grid-template-columns:1fr}}
+.gloss dt{font-weight:700;color:var(--tx);font-size:13.5px;margin-bottom:3px}
+.gloss dd{color:var(--tx2);font-size:12.5px;line-height:1.6;margin-bottom:2px}
+.note{background:var(--bg3);border-left:3px solid var(--amber);border-radius:6px;padding:10px 13px;font-size:12.5px;color:var(--tx2);line-height:1.6;margin-top:14px}
+.note b{color:var(--amber2)}
+.foot{text-align:center;color:var(--tx3);font-size:11px;margin-top:34px;line-height:1.7}
+.loading{text-align:center;padding:60px 20px;color:var(--tx3)}
+@media(max-width:640px){.chart-box{height:260px}.kpi .val{font-size:20px}}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div class="brand">
+      <div class="logo">σ</div>
+      <div>
+        <h1>VIX vs Volatilità Realizzata</h1>
+        <div class="sub" id="sub">Laboratorio di analisi della volatilità · <span id="updated" class="muted">…</span></div>
+      </div>
+    </div>
+    <button id="theme-toggle" class="usel" title="Cambia tema chiaro / scuro" aria-label="Cambia tema">🌙</button>
+  </header>
+
+  <div class="banner">
+    <span style="font-size:18px">🧭</span>
+    <div>
+      <b>Cosa stiamo guardando.</b> Confrontiamo due misure della volatilità dello stesso indice azionario.
+      Il <b>VIX</b> è la volatilità <b>implicita</b>: è ricavata dai prezzi delle opzioni e dice quanta oscillazione il
+      mercato si <b>aspetta</b> nei prossimi 30 giorni (è <i>forward-looking</i>, sotto misura "neutrale al rischio").
+      La <b>volatilità realizzata</b> è quella <b>effettivamente accaduta</b>: la deviazione standard dei rendimenti
+      degli ultimi 30 giorni, annualizzata (è <i>backward-looking</i>). Entrambe sono espresse in <b>punti di volatilità annua (%)</b>.
+      La distanza fra le due — il <b>premio per il rischio di volatilità</b> — è il cuore di questa analisi.
+    </div>
+  </div>
+
+  <div id="app">
+    <div class="loading">Caricamento dati…</div>
+  </div>
+
+  <div class="foot" id="foot"></div>
+</div>
+
+<script src="js/charts.js"></script>
+<script src="js/app.js"></script>
+</body>
+</html>

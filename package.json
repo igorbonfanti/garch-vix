@@ -1,0 +1,10 @@
+{
+  "name": "garch-vix",
+  "version": "1.0.0",
+  "description": "VIX vs Volatilità Realizzata — laboratorio di analisi della volatilità (GARCH, VRP, vol cone)",
+  "type": "commonjs",
+  "scripts": {
+    "fetch": "node scripts/fetch_data.js"
+  },
+  "license": "ISC"
+}
