@@ -18,7 +18,7 @@
 const fs = require('fs');
 const path = require('path');
 const { fetchOHLC } = require('./yahoo');
-const { fitGarch11, recursiveVol } = require('./garch');
+const { fitGarch11 } = require('./garch');
 
 // ── PARAMETRI (modifica qui) ───────────────────────────────────────────────
 const ASSET_TICKER = '^GSPC';     // sottostante (Yahoo)
@@ -136,9 +136,17 @@ async function main() {
   for (let i = 1; i < n; i++) logRet[i] = Math.log(price[i] / price[i - 1]) * 100;
 
   // ── volatilità realizzata ──
+  // Il primo log-return (i=0) è indefinito: lo lasciamo a 0 ma viene escluso da
+  // ogni finestra valida (la prima RV è all'indice ROLL_DAYS, finestra 1..ROLL_DAYS).
   const logRetClean = logRet.map((x) => (x == null ? 0 : x));
   const rv = realizedVol(logRetClean, ROLL_DAYS, TRADING_DAYS).map((v, i) => (i < ROLL_DAYS ? null : v));
   const parkinson = parkinsonVol(high, low, ROLL_DAYS, TRADING_DAYS);
+
+  // Volatilità realizzata FORWARD: ciò che accade nei ROLL_DAYS giorni SUCCESSIVI.
+  // rvFwd[t] = volatilità realizzata sulla finestra [t+1 .. t+ROLL_DAYS] = rv[t+ROLL_DAYS].
+  // È il bersaglio corretto per valutare la capacità PREVISIVA di VIX e GARCH.
+  const rvFwd = new Array(n).fill(null);
+  for (let i = 0; i < n - ROLL_DAYS; i++) rvFwd[i] = rv[i + ROLL_DAYS];
 
   // ── GARCH(1,1): fit in-sample, forecast ricorsivo su tutta la serie ──
   const splitIdx = dates.findIndex((d) => d >= SPLIT_DATE);
@@ -147,14 +155,36 @@ async function main() {
   const g = fitGarch11(retIS);
   console.log(`   ω=${g.omega.toFixed(6)}  α=${g.alpha.toFixed(4)}  β=${g.beta.toFixed(4)}  (α+β=${g.persistence.toFixed(4)})`);
 
-  const garchAll = recursiveVol(logRetClean, g, TRADING_DAYS);
-  const garch = garchAll.map((v, i) => (i < splitIdx ? null : v)); // solo OOS
+  // Varianza condizionata ricorsiva. garch1 = vol annualizzata 1-step (per il grafico).
+  // garchFwd = previsione GARCH della vol MEDIA sui prossimi ROLL_DAYS giorni
+  // (formula multi-step a orizzonte H con mean-reversion verso la varianza di lungo periodo),
+  // bersaglio: rvFwd. È il confronto previsivo corretto, non quello contemporaneo.
+  const { mu, omega, alpha, beta, longRunVar } = g;
+  const persist = alpha + beta, H = ROLL_DAYS, sLR = longRunVar;
+  const garch1 = new Array(n).fill(null), garchFwd = new Array(n).fill(null);
+  let h = sLR;
+  for (let i = 0; i < n; i++) {
+    garch1[i] = Math.sqrt(h * TRADING_DAYS);
+    const e = logRetClean[i] - mu;
+    const hNext = omega + alpha * e * e + beta * h;              // varianza attesa per t+1
+    // media di E[h_{t+k}] per k=1..H:  H*sLR + (hNext-sLR)*(1-persist^H)/(1-persist)
+    const geom = persist < 1 ? (1 - Math.pow(persist, H)) / (1 - persist) : H;
+    const avgVar = (H * sLR + (hNext - sLR) * geom) / H;
+    garchFwd[i] = Math.sqrt(Math.max(avgVar, 0) * TRADING_DAYS);
+    h = hNext;
+  }
+  // serie GARCH mostrata a video: 1-step, solo out-of-sample
+  const garch = garch1.map((v, i) => (i < splitIdx ? null : v));
 
   // ── variance risk premium, rapporto, drawdown ──
   const vrp = new Array(n).fill(null), ratio = new Array(n).fill(null);
   for (let i = 0; i < n; i++) {
     if (rv[i] != null) { vrp[i] = vixLevel[i] - rv[i]; ratio[i] = vixLevel[i] / rv[i]; }
   }
+  const vrpVals = vrp.filter((v) => v != null && isFinite(v));
+  const vrpMean = vrpVals.reduce((a, b) => a + b, 0) / vrpVals.length;
+  const vrpPos = (100 * vrpVals.filter((v) => v > 0).length / vrpVals.length); // % di giorni col premio positivo
+
   // drawdown del sottostante (%)
   const drawdown = new Array(n); let peak = -Infinity;
   for (let i = 0; i < n; i++) { peak = Math.max(peak, price[i]); drawdown[i] = (price[i] / peak - 1) * 100; }
@@ -192,18 +222,22 @@ async function main() {
     cone.current.push(r2(series[series.length - 1]));
   }
 
-  // ── metriche OOS (vs realizzata) ──
-  const vixOOS = vixLevel.map((v, i) => (i >= splitIdx && rv[i] != null ? v : null));
-  const rvOOS = rv.map((v, i) => (i >= splitIdx ? v : null));
-  const garchOOS = garch.map((v, i) => (rv[i] != null ? v : null));
-  const mVix = metrics(vixOOS, rvOOS);
-  const mGarch = metrics(garchOOS, rvOOS);
-  console.log(`📊 OOS  VIX → R²=${mVix.r2} corr=${mVix.corr}  |  GARCH → R²=${mGarch.r2} corr=${mGarch.corr}`);
+  // ── metriche di accuratezza PREVISIVA (out-of-sample, vs realizzata FORWARD) ──
+  // Ogni stima fatta a tempo t (VIX_t, forecast GARCH a 30g) è confrontata con la
+  // volatilità realizzata nei 30 giorni SUCCESSIVI. È il test onesto: niente
+  // circolarità (il GARCH non "insegue" più una realizzata che condivide gli stessi dati).
+  const target = (i) => (i >= splitIdx && rvFwd[i] != null ? rvFwd[i] : null);
+  const vixPred = vixLevel.map((v, i) => (target(i) != null ? v : null));
+  const garchPred = garchFwd.map((v, i) => (target(i) != null ? v : null));
+  const tgt = vixLevel.map((_, i) => target(i));
+  const mVix = metrics(vixPred, tgt);
+  const mGarch = metrics(garchPred, tgt);
+  console.log(`📊 Forecast OOS (vs realizzata futura 30g)  VIX → R²=${mVix.r2} corr=${mVix.corr} bias=${mVix.bias}  |  GARCH → R²=${mGarch.r2} corr=${mGarch.corr} bias=${mGarch.bias}`);
 
-  // ── scatter VIX vs RV (periodo OOS, campionato per leggerezza) ──
+  // ── scatter VIX vs realizzata FUTURA (il VIX prevede la vol dei 30g successivi?) ──
   const scatter = [];
   for (let i = splitIdx; i < n; i++) {
-    if (rv[i] != null && (i % 2 === 0)) scatter.push([r2(vixLevel[i]), r2(rv[i])]);
+    if (rvFwd[i] != null && (i % 2 === 0)) scatter.push([r2(vixLevel[i]), r2(rvFwd[i])]);
   }
 
   // ── snapshot corrente + percentili di regime ──
@@ -224,6 +258,7 @@ async function main() {
       corrWin: CORR_WIN, currency: asset.currency,
       dataStart: dates[0], dataEnd: dates[last],
       generatedAt: new Date().toISOString(),
+      vrpMean: r2(vrpMean), vrpPosPct: r2(vrpPos, 1),
       garch: {
         mu: r2(g.mu, 6), omega: r2(g.omega, 8), alpha: r2(g.alpha, 6), beta: r2(g.beta, 6),
         persistence: r2(g.persistence, 4), longRunVol: r2(Math.sqrt(g.longRunVar * TRADING_DAYS), 2),

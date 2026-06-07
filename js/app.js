@@ -1,5 +1,7 @@
 /* app.js — Vol Lab: carica i dati, costruisce KPI + sezioni, gestisce range
- * temporale e tema chiaro/scuro (standard d'ecosistema Antigravity). */
+ * temporale e tema chiaro/scuro (standard d'ecosistema Antigravity).
+ * Al cambio range i grafici vengono RICOSTRUITI sui soli dati della finestra,
+ * così l'asse Y si auto-adatta alla vista (niente schiacciamenti da picchi fuori campo). */
 (function () {
   'use strict';
 
@@ -8,10 +10,10 @@
   let rangeYears = 10;   // range visualizzato di default
 
   const $ = (s, r = document) => r.querySelector(s);
-  const fmt = (v, d = 2) => (v == null ? '—' : Number(v).toFixed(d));
-  const yearsAgoMs = (y) => (y >= 99 ? D.ms[0] : Date.now() - y * 365.25 * 864e5);
+  const fmt = (v, d = 2) => (v == null || isNaN(v) ? '—' : Number(v).toFixed(d));
+  const minMs = () => (rangeYears >= 99 ? D.ms[0] : Math.max(D.ms[0], Date.now() - rangeYears * 365.25 * 864e5));
+  const maxMs = () => D.ms[D.ms.length - 1];
 
-  // regime da percentile
   function regime(pct, invert) {
     if (pct == null) return { cls: 'mid', txt: '—' };
     const hi = invert ? pct <= 33 : pct >= 66;
@@ -25,7 +27,6 @@
   function kpis() {
     const c = D.current, m = D.meta;
     const vixR = regime(c.vixPct), rvR = regime(c.rvPct), vrpR = regime(c.vrpPct);
-    const ratioTxt = c.ratio >= 1 ? 'opzioni "care"' : 'opzioni "a sconto"';
     return `<div class="kpis">
       <div class="kpi">
         <div class="lab">VIX · implicita</div>
@@ -48,19 +49,18 @@
       <div class="kpi">
         <div class="lab">Rapporto VIX / RV</div>
         <div class="val">${fmt(c.ratio,2)}<small>×</small></div>
-        <div class="cmp">${ratioTxt}</div>
+        <div class="cmp">${c.ratio>=1?'opzioni "care"':'opzioni "a sconto"'}</div>
         <span class="badge ${c.ratio>=1.2?'hi':c.ratio>=0.9?'mid':'lo'}">${c.ratio>=1?'VIX > realizzata':'VIX < realizzata'}</span>
       </div>
       <div class="kpi">
         <div class="lab">Forecast GARCH(1,1)</div>
         <div class="val">${fmt(c.garch)}<small>%</small></div>
-        <div class="cmp">stima econometrica</div>
+        <div class="cmp">stima econometrica 1-step</div>
         <span class="badge mid">long-run ${fmt(m.garch.longRunVol)}%</span>
       </div>
     </div>`;
   }
 
-  /* ── selettore range ─────────────────────────────────────────────────── */
   function rangeBar() {
     const opts = [[1,'1A'],[3,'3A'],[5,'5A'],[10,'10A'],[99,'Max']];
     return `<div class="seg" id="rangebar">${opts.map(([y,l]) =>
@@ -70,99 +70,116 @@
   /* ── struttura sezioni ───────────────────────────────────────────────── */
   function layout() {
     const m = D.meta, mv = D.metrics.vix, mg = D.metrics.garch;
+    const better = (a, b, lower) => (a == null || b == null) ? 0 : (lower ? (a < b ? -1 : 1) : (a > b ? -1 : 1));
     return `
     ${kpis()}
 
     <div class="card">
       <h2>📈 Volatilità nel tempo: implicita, realizzata, GARCH ${rangeBar()}</h2>
-      <p class="desc">Le tre stime della volatilità a confronto. Quando la <b>verde (VIX)</b> stacca verso l'alto
-        la <b>blu (realizzata)</b>, il mercato sta pagando un <b>premio</b> per proteggersi: succede quasi sempre,
-        ma si allarga nelle fasi di paura. La <b>ambra (GARCH)</b> è una previsione puramente statistica basata
-        sui rendimenti passati. Usa i pulsanti per cambiare l'orizzonte; passa il mouse per i valori puntuali.</p>
+      <p class="desc">Le tre stime a confronto. La <b style="color:var(--blue)">blu (realizzata)</b> è ciò che è
+        davvero accaduto negli ultimi ${m.rollDays} giorni; la <b style="color:var(--green)">verde (VIX)</b> è ciò che il
+        mercato si aspetta; la <b style="color:var(--amber)">ambra tratteggiata (GARCH)</b> è la stima econometrica.
+        La verde tende a stare <b>sopra</b> la blu: è il premio per il rischio. Usa i pulsanti per cambiare orizzonte.</p>
       <div class="chart-box tall"><canvas id="c-vol"></canvas></div>
-      <div class="note">💡 <b>Come leggerlo:</b> i picchi coincidono con i grandi shock (2008, 2011, marzo 2020, 2022).
-        Dopo lo shock la volatilità realizzata <b>rientra</b> più lentamente del VIX, perché il VIX guarda avanti e
-        "annusa" la calma prima che si veda nei prezzi. La volatilità è <b>mean-reverting</b>: tende a tornare verso
-        la sua media di lungo periodo (~${fmt(m.garch.longRunVol)}%).</div>
+      <div class="note">💡 <b>Come leggerlo:</b> i picchi coincidono con i grandi shock (2008, 2020 COVID, 2022, 2025).
+        La volatilità è <b>mean-reverting</b>: tende a tornare verso la media di lungo periodo (~${fmt(m.garch.longRunVol)}%).
+        Dopo uno shock il VIX rientra prima della realizzata, perché guarda avanti.</div>
     </div>
 
-    <div class="card">
-      <h2>🏔️ Prezzo dell'indice e drawdown</h2>
-      <p class="desc">Il sottostante (scala logaritmica) e la sua <b>perdita dai massimi</b> (drawdown).
-        Mettilo a fianco del grafico sopra: i <b>crolli di prezzo</b> e i <b>picchi di volatilità</b> arrivano
-        insieme. È il cosiddetto <b>"leverage effect"</b> — i ribassi fanno schizzare la volatilità molto più dei rialzi.</p>
-      <div class="chart-box"><canvas id="c-price"></canvas></div>
+    <div class="grid2">
+      <div class="card">
+        <h2>🏔️ Prezzo dell'indice <span class="muted" style="font-size:12px;font-weight:400">(scala log)</span></h2>
+        <p class="desc">Il sottostante in scala logaritmica (così le variazioni percentuali sono confrontabili nel tempo).
+          Confrontalo con i picchi di volatilità qui sopra.</p>
+        <div class="chart-box"><canvas id="c-price"></canvas></div>
+      </div>
+      <div class="card">
+        <h2>🌊 Drawdown dai massimi</h2>
+        <p class="desc">Quanto l'indice è sotto il suo massimo precedente. I fondi del drawdown coincidono con i
+          picchi di volatilità: i ribassi fanno schizzare la vol molto più dei rialzi (<b>leverage effect</b>).</p>
+        <div class="chart-box"><canvas id="c-dd"></canvas></div>
+      </div>
     </div>
 
     <div class="grid2">
       <div class="card">
         <h2>💰 Variance Risk Premium (VRP)</h2>
-        <p class="desc"><b>VIX − Volatilità realizzata.</b> È il sovrapprezzo che chi compra opzioni paga rispetto
-          alla volatilità che poi si materializza. È <b>quasi sempre positivo</b> (chi vende protezione si fa pagare
-          il rischio): storicamente in media <b>+${fmt(mv.bias)}</b> punti. Quando il VRP è <b>molto alto</b> le opzioni
-          sono costose (utile per chi le vende); quando è <b>negativo</b> il mercato è stato colto di sorpresa.</p>
+        <p class="desc"><b>VIX − Volatilità realizzata.</b> Il sovrapprezzo pagato per la protezione. È stato
+          <b>positivo nell'${fmt(m.vrpPosPct,0)}%</b> delle sedute (media <b>+${fmt(m.vrpMean)}</b> punti): chi vende
+          protezione si fa pagare il rischio. Negativo solo quando il mercato è colto di sorpresa (es. crollo COVID).</p>
         <div class="chart-box sm"><canvas id="c-vrp"></canvas></div>
       </div>
       <div class="card">
         <h2>⚖️ Rapporto VIX / Realizzata</h2>
-        <p class="desc">La stessa idea in forma di <b>rapporto</b>. Sopra <b>1.0</b> il mercato prezza più volatilità
-          di quella realizzata di recente (premio); valori <b>molto alti</b> indicano protezione cara, valori
-          <b>sotto 1.0</b> indicano che la realizzata ha superato le attese (raro, fasi di stress acuto).</p>
+        <p class="desc">La stessa idea come <b>rapporto</b>. Sopra <b>1.0</b> il mercato prezza più volatilità di quella
+          realizzata (premio); valori alti = protezione cara; sotto <b>1.0</b> la realizzata ha superato le attese.</p>
         <div class="chart-box sm"><canvas id="c-ratio"></canvas></div>
       </div>
     </div>
 
     <div class="grid2">
       <div class="card">
-        <h2>🎯 VIX vs Realizzata — dispersione</h2>
-        <p class="desc">Ogni punto è una seduta (periodo out-of-sample). La <b>linea tratteggiata</b> è la parità
-          (VIX = realizzata); la <b>linea ambra</b> è la regressione. I punti stanno <b>quasi tutti sopra</b> la parità:
-          è la prova visiva che il VIX <b>sovrastima sistematicamente</b> la volatilità che poi accade — di nuovo il premio.</p>
+        <h2>🎯 Il VIX prevede la volatilità futura?</h2>
+        <p class="desc">Ogni punto: <b>VIX oggi</b> (x) vs <b>volatilità realizzata nei 30 giorni successivi</b> (y),
+          nel periodo out-of-sample. La <b>linea tratteggiata</b> è la parità. I punti stanno <b>in prevalenza sotto</b>
+          la parità: in media il VIX <b>sovrastima</b> la volatilità che poi si realizza (il premio). Sopra la parità si
+          finisce solo nelle crisi, quando la volatilità futura supera le attese.</p>
         <div class="chart-box sm"><canvas id="c-scatter"></canvas></div>
       </div>
       <div class="card">
         <h2>🔗 Correlazione rolling VIX ↔ Realizzata</h2>
-        <p class="desc">Quanto si muovono <b>insieme</b>, giorno per giorno, su una finestra di ${m.corrWin} sedute
-          (correlazione delle variazioni). Valori alti = il VIX reagisce in tempo reale a ciò che accade; cali della
-          correlazione segnalano fasi in cui implicita e realizzata si <b>scollegano</b> (es. compiacenza o panico anticipato).</p>
+        <p class="desc">Quanto si muovono <b>insieme</b>, giorno per giorno, su ${m.corrWin} sedute (correlazione delle
+          variazioni). Alta = il VIX reagisce in tempo reale; cali segnalano fasi in cui implicita e realizzata si
+          <b>scollegano</b>. L'asse non è troncato: i valori negativi sono mostrati per intero.</p>
         <div class="chart-box sm"><canvas id="c-corr"></canvas></div>
       </div>
     </div>
 
     <div class="card">
       <h2>🌋 Cono di volatilità</h2>
-      <p class="desc">Strumento classico del vol-trading. Per ogni <b>orizzonte</b> (10, 21, … 252 giorni) mostra la
-        <b>distribuzione storica</b> della volatilità realizzata: mediana, fasce 25–75 e 5–95 percentile. Il punto
-        <b>ambra "oggi"</b> dice dove ci troviamo <b>adesso</b> rispetto alla storia, per ciascun orizzonte. Se "oggi"
-        è vicino al p95 la volatilità è eccezionalmente alta (probabile rientro); vicino al p5 è insolitamente bassa.</p>
+      <p class="desc">Per ogni <b>orizzonte</b> (10, 21, … 252 giorni) la <b>distribuzione storica</b> della volatilità
+        realizzata: mediana, fasce 25–75 e 5–95 percentile. Il punto <b>ambra "oggi"</b> dice dove ci troviamo
+        <b>adesso</b> rispetto alla storia, per ciascun orizzonte. Vicino al p95 = vol eccezionalmente alta (probabile
+        rientro); vicino al p5 = insolitamente bassa.</p>
       <div class="chart-box"><canvas id="c-cone"></canvas></div>
     </div>
 
     <div class="card">
-      <h2>📊 Chi prevede meglio la volatilità realizzata?</h2>
-      <p class="desc">Accuratezza di VIX e GARCH nel <b>prevedere</b> la volatilità realizzata, nel periodo
-        out-of-sample (dal ${m.splitDate}). <b>MAE/RMSE</b>: errore medio (più basso è meglio). <b>Corr</b> e <b>R²</b>:
-        quanto seguono la realizzata (più alto è meglio). <b>Bias</b>: errore sistematico (il VIX è positivo perché
-        sta sopra — il premio).</p>
+      <h2>📊 Chi prevede meglio la volatilità futura?</h2>
+      <p class="desc">Test <b>previsivo onesto</b>: ogni stima a tempo <i>t</i> (VIX di oggi, forecast GARCH a 30 giorni)
+        è confrontata con la volatilità <b>effettivamente realizzata nei 30 giorni successivi</b> (out-of-sample,
+        dal ${m.splitDate}). <b>MAE/RMSE</b>: errore medio (più basso meglio). <b>Corr</b>: quanto segue la realizzata
+        futura. <b>R²</b>: quota di varianza spiegata. <b>Bias</b>: errore sistematico.</p>
       <table>
         <thead><tr><th>Modello</th><th>MAE</th><th>RMSE</th><th>Corr</th><th>R²</th><th>Bias</th></tr></thead>
         <tbody>
-          <tr><td class="tk">VIX (implicita)</td>${row(mv,mg,'mae',true)}${row(mv,mg,'rmse',true)}${row(mv,mg,'corr')}${row(mv,mg,'r2')}<td class="mono-td">${fmt(mv.bias)}</td></tr>
-          <tr><td class="tk">GARCH(1,1)</td>${row(mg,mv,'mae',true)}${row(mg,mv,'rmse',true)}${row(mg,mv,'corr')}${row(mg,mv,'r2')}<td class="mono-td">${fmt(mg.bias)}</td></tr>
+          <tr><td class="tk">VIX (implicita)</td>
+            <td class="mono-td ${better(mv.mae,mg.mae,1)<0?'win':''}">${fmt(mv.mae)}</td>
+            <td class="mono-td ${better(mv.rmse,mg.rmse,1)<0?'win':''}">${fmt(mv.rmse)}</td>
+            <td class="mono-td ${better(mv.corr,mg.corr,0)<0?'win':''}">${fmt(mv.corr,3)}</td>
+            <td class="mono-td">${fmt(mv.r2,3)}</td>
+            <td class="mono-td">+${fmt(mv.bias)}</td></tr>
+          <tr><td class="tk">GARCH(1,1) a 30g</td>
+            <td class="mono-td ${better(mg.mae,mv.mae,1)<0?'win':''}">${fmt(mg.mae)}</td>
+            <td class="mono-td ${better(mg.rmse,mv.rmse,1)<0?'win':''}">${fmt(mg.rmse)}</td>
+            <td class="mono-td ${better(mg.corr,mv.corr,0)<0?'win':''}">${fmt(mg.corr,3)}</td>
+            <td class="mono-td">${fmt(mg.r2,3)}</td>
+            <td class="mono-td">+${fmt(mg.bias)}</td></tr>
         </tbody>
       </table>
-      <div class="note">⚠️ <b>Attenzione all'interpretazione.</b> Il GARCH sembra "vincere" su R² e MAE, ma è in parte
-        <b>circolare</b>: usa gli stessi rendimenti passati con cui si calcola la volatilità realizzata, quindi la
-        "insegue" quasi per costruzione. Il VIX è un'informazione <b>diversa e indipendente</b> (le attese implicite nelle
-        opzioni): il suo "errore" è in larga parte il <b>premio per il rischio</b>, non un difetto del modello.
-        Non è una gara: i due strumenti rispondono a domande diverse.</div>
+      <div class="note">💡 <b>Come leggerlo.</b> Prevedere la volatilità a 30 giorni è <b>intrinsecamente difficile</b>:
+        l'R² è modesto per entrambi (la vol futura è molto rumorosa). Il <b>VIX correla meglio</b> con ciò che accadrà
+        (${fmt(mv.corr,2)} vs ${fmt(mg.corr,2)}) — contiene informazione previsiva genuina — ma è <b>biased verso l'alto</b>
+        di +${fmt(mv.bias)} punti, ed è esattamente il <b>premio per il rischio</b>. Il <b>GARCH è meno distorto</b>
+        (bias +${fmt(mg.bias)}) e quindi ha MAE più basso. Confronto corretto e <b>non circolare</b>: la stima a tempo
+        <i>t</i> non condivide dati col bersaglio futuro.</div>
     </div>
 
     <div class="card">
       <h2>🔧 Parametri del modello GARCH(1,1)</h2>
       <p class="desc">Stimati in-sample (prima del ${m.splitDate}) con massima verosimiglianza.
         h<sub>t</sub> = ω + α·ε²<sub>t-1</sub> + β·h<sub>t-1</sub>. <b>α</b> = reattività agli shock recenti,
-        <b>β</b> = memoria/persistenza, <b>α+β</b> = persistenza totale (vicino a 1 ⇒ gli shock si riassorbono lentamente).</p>
+        <b>β</b> = persistenza/memoria, <b>α+β</b> vicino a 1 ⇒ gli shock si riassorbono lentamente.</p>
       <div class="params">
         <div class="param"><div class="pl">ω (omega)</div><div class="pv">${fmt(m.garch.omega,5)}</div></div>
         <div class="param"><div class="pl">α (alpha)</div><div class="pv">${fmt(m.garch.alpha,3)}</div></div>
@@ -175,44 +192,37 @@
     <div class="card">
       <h2>📚 Glossario — capire cosa stiamo guardando</h2>
       <dl class="gloss">
-        <div><dt>Volatilità implicita (VIX)</dt><dd>Ricavata dai prezzi delle opzioni sull'indice: la volatilità che il mercato si <b>aspetta</b> nei prossimi 30 giorni, annualizzata. È <i>forward-looking</i> e contiene un premio per il rischio.</dd></div>
-        <div><dt>Volatilità realizzata</dt><dd>Deviazione standard dei rendimenti giornalieri degli ultimi ${m.rollDays} giorni, moltiplicata per √${m.tradingDays} per annualizzarla. È ciò che è <b>davvero accaduto</b>.</dd></div>
-        <div><dt>Variance / Volatility Risk Premium</dt><dd>La differenza VIX − realizzata. Compenso che gli investitori pagano per la protezione. Tipicamente positivo; è la base di molte strategie di <i>vendita di volatilità</i>.</dd></div>
-        <div><dt>GARCH(1,1)</dt><dd>Modello econometrico che descrive come la volatilità <b>cambia nel tempo</b> a partire dagli shock passati. Cattura il <i>volatility clustering</i> (le fasi turbolente si raggruppano).</dd></div>
-        <div><dt>Annualizzazione (×√252)</dt><dd>La volatilità giornaliera si scala alla base annua moltiplicando per la radice del numero di sedute (~252). Così tutte le misure sono confrontabili in "% annua".</dd></div>
-        <div><dt>Mean reversion</dt><dd>La volatilità tende a tornare verso una media di lungo periodo: valori estremi (alti o bassi) tendono a non durare.</dd></div>
-        <div><dt>Out-of-sample (OOS)</dt><dd>Il GARCH è stimato solo sui dati <b>prima</b> del ${m.splitDate} e poi proiettato in avanti senza re-fitting: un test più onesto della sua reale capacità predittiva.</dd></div>
-        <div><dt>Stimatore Parkinson</dt><dd>Misura alternativa di volatilità che usa massimi/minimi di seduta: più efficiente del close-to-close. Oggi vale ${fmt(D.current.parkinson)}% (vs ${fmt(D.current.rv)}% close-to-close).</dd></div>
+        <div><dt>Volatilità implicita (VIX)</dt><dd>Ricavata dai prezzi delle opzioni: la volatilità che il mercato si <b>aspetta</b> nei prossimi 30 giorni, annualizzata. È <i>forward-looking</i> e contiene un premio per il rischio.</dd></div>
+        <div><dt>Volatilità realizzata (trailing)</dt><dd>Deviazione standard dei rendimenti degli ultimi ${m.rollDays} giorni × √${m.tradingDays}. È ciò che è <b>davvero accaduto</b>. Usata nei grafici temporali.</dd></div>
+        <div><dt>Volatilità realizzata futura (forward)</dt><dd>La stessa misura ma sui ${m.rollDays} giorni <b>successivi</b>. È il bersaglio corretto per valutare se VIX e GARCH <b>prevedono</b> davvero la volatilità.</dd></div>
+        <div><dt>Variance / Volatility Risk Premium</dt><dd>VIX − realizzata. Compenso pagato per la protezione. Positivo nell'${fmt(m.vrpPosPct,0)}% delle sedute; base delle strategie di <i>vendita di volatilità</i>.</dd></div>
+        <div><dt>GARCH(1,1)</dt><dd>Modello econometrico della volatilità che cambia nel tempo. Cattura il <i>volatility clustering</i> (le fasi turbolente si raggruppano). Qui stimato in JS con massima verosimiglianza.</dd></div>
+        <div><dt>Annualizzazione (×√252)</dt><dd>La volatilità giornaliera si scala alla base annua moltiplicando per √252. Così tutte le misure sono in "% annua" e confrontabili col VIX.</dd></div>
+        <div><dt>Mean reversion</dt><dd>La volatilità tende a tornare verso una media di lungo periodo: gli estremi (alti o bassi) tendono a non durare.</dd></div>
+        <div><dt>Out-of-sample (OOS)</dt><dd>Il GARCH è stimato solo sui dati <b>prima</b> del ${m.splitDate} e proiettato in avanti senza re-fitting: un test onesto della reale capacità predittiva.</dd></div>
       </dl>
     </div>`;
   }
 
-  function row(self, other, k, lowerBetter) {
-    const a = self[k], b = other[k];
-    const win = a != null && b != null && (lowerBetter ? a < b : a > b);
-    return `<td class="mono-td ${win?'win':''}">${fmt(a, k==='corr'||k==='r2'?3:2)}</td>`;
-  }
-
-  /* ── costruzione / aggiornamento grafici ─────────────────────────────── */
+  /* ── costruzione grafici sulla finestra corrente ─────────────────────── */
   function buildCharts() {
     Object.values(charts).forEach((c) => c && c.destroy());
-    const min = yearsAgoMs(rangeYears);
-    charts.vol = VC.volChart($('#c-vol'), D, min);
-    charts.price = VC.priceChart($('#c-price'), D, min);
-    charts.vrp = VC.vrpChart($('#c-vrp'), D, min, D.metrics.vix.bias);
-    charts.ratio = VC.ratioChart($('#c-ratio'), D, min);
+    charts = {};
+    const min = minMs(), max = maxMs();
+    charts.vol = VC.volChart($('#c-vol'), D, min, max);
+    charts.price = VC.priceChart($('#c-price'), D, min, max);
+    charts.dd = VC.drawdownChart($('#c-dd'), D, min, max);
+    charts.vrp = VC.vrpChart($('#c-vrp'), D, min, max, D.meta.vrpMean);
+    charts.ratio = VC.ratioChart($('#c-ratio'), D, min, max);
     charts.scatter = VC.scatterChart($('#c-scatter'), D);
-    charts.corr = VC.corrChart($('#c-corr'), D, min);
+    charts.corr = VC.corrChart($('#c-corr'), D, min, max);
     charts.cone = VC.coneChart($('#c-cone'), D);
   }
 
   function applyRange(y) {
     rangeYears = y;
-    const min = yearsAgoMs(y);
-    ['vol', 'price', 'vrp', 'ratio', 'corr'].forEach((k) => {
-      if (charts[k]) { charts[k].options.scales.x.min = min; charts[k].update('none'); }
-    });
     $('#rangebar').querySelectorAll('button').forEach((b) => b.classList.toggle('on', +b.dataset.y === y));
+    buildCharts(); // ricostruisce sui dati della finestra → asse Y corretto
   }
 
   /* ── tema ────────────────────────────────────────────────────────────── */
@@ -230,8 +240,7 @@
       document.documentElement.setAttribute('data-theme', t);
       try { localStorage.setItem('antigravity-theme', t); } catch (e) {}
       sync();
-      buildCharts();            // ridisegna con i colori del nuovo tema
-      applyRange(rangeYears);
+      buildCharts();
     });
   }
 

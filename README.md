@@ -13,14 +13,15 @@ Colab `garch_export`, ma elimina il giro "esporta JSON a mano": i dati si rigene
 
 | Strumento | A cosa serve |
 |---|---|
-| **VIX vs Vol realizzata vs GARCH** | Le tre stime della volatilità nel tempo, con selettore di orizzonte (1A→Max) |
-| **Prezzo + Drawdown** | Lega i crolli di prezzo ai picchi di volatilità (*leverage effect*) |
-| **Variance Risk Premium (VIX − RV)** | Il premio che si paga per la protezione: quasi sempre positivo |
+| **VIX vs Vol realizzata vs GARCH** | Le tre stime della volatilità nel tempo, con selettore di orizzonte (1A→Max). Linee a piena risoluzione, asse Y auto-adattato alla finestra |
+| **Prezzo (log)** | Il sottostante in scala logaritmica con tick puliti |
+| **Drawdown** | Underwater chart: lega i crolli di prezzo ai picchi di volatilità (*leverage effect*) |
+| **Variance Risk Premium (VIX − RV)** | Il premio che si paga per la protezione: positivo nell'~88% delle sedute |
 | **Rapporto VIX / RV** | "Quanto sono care" le opzioni rispetto alla volatilità realizzata |
-| **Scatter VIX vs RV** | Prova visiva che il VIX sovrastima sistematicamente la realizzata (regressione + parità) |
-| **Correlazione rolling** | Quanto implicita e realizzata si muovono insieme nel tempo |
+| **Scatter VIX vs realizzata futura** | Il VIX prevede la vol dei 30g *successivi*? I punti stanno in prevalenza sotto la parità (premio) |
+| **Correlazione rolling** | Quanto implicita e realizzata si muovono insieme (asse non troncato) |
 | **Cono di volatilità** | Dove sta la volatilità di *oggi* rispetto alla sua distribuzione storica, per orizzonte |
-| **Tabella di accuratezza** | MAE / RMSE / Corr / R² / Bias di VIX e GARCH nel periodo out-of-sample |
+| **Tabella di accuratezza previsiva** | MAE / RMSE / Corr / R² / Bias di VIX e GARCH **vs realizzata futura 30g** (test onesto, non circolare) |
 | **Parametri GARCH(1,1)** | ω, α, β, persistenza, volatilità di lungo periodo |
 | **Glossario** | Spiegazione in chiaro di ogni concetto |
 
@@ -101,6 +102,8 @@ garch-vix/
 - **Dati**: Yahoo Finance chart API, scaricati lato Node (niente problemi di CORS) e committati come JSON statico.
 - **GARCH**: stima propria in JavaScript con massima verosimiglianza gaussiana e *variance targeting*; replica
   nella sostanza l'output della libreria Python `arch` del Colab (α+β ≈ 0.99 per gli indici azionari).
-- **Attenzione metodologica**: il GARCH "insegue" la volatilità realizzata perché usa gli stessi rendimenti
-  passati (R² alto in parte circolare). Il VIX è informazione *indipendente*: il suo scarto è in gran parte
-  il *premio per il rischio*, non un errore. I due strumenti rispondono a domande diverse.
+- **Metodologia di valutazione (corretta)**: l'accuratezza si misura confrontando ogni stima fatta a tempo *t*
+  (VIX di oggi, forecast GARCH a orizzonte 30g con mean-reversion) con la volatilità **realizzata nei 30 giorni
+  successivi** (forward). È il test previsivo onesto, **non circolare**: la stima non condivide dati col bersaglio
+  futuro. Risultato tipico: prevedere la vol a 30g è difficile (R² modesto per entrambi); il VIX correla meglio
+  ma è biased verso l'alto (= premio per il rischio), il GARCH è meno distorto.
